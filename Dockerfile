@@ -7,12 +7,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # Set the working directory
 WORKDIR /app
 
-# Enable bytecode compilation and copy dependency files
+# Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-project --no-dev
+
+# Copy dependency files and sync
+COPY uv.lock pyproject.toml ./
+RUN uv sync --frozen --no-install-project --no-dev
 
 # Final Stage
 FROM python:3.12-slim
@@ -30,5 +30,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8080
 
 # Run the function using the Functions Framework
-# Replace 'hello_world' with your actual function name
-CMD ["functions-framework", "--target=hello_world"]
+CMD ["functions-framework", "--target=hello_http"]
