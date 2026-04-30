@@ -1,0 +1,12 @@
+[project]
+name = "mycgmappbackendpy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "curl-cffi>=0.15.0",
+    "functions-framework>=3.10.1",
+    "garminconnect>=0.3.3",
+    "requests>=2.33.1",
+]
