@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastMCP Server
 mcp = FastMCP(
-    "MyCgmApp MCP Server",
-    description="MCP Server for My CGM App backend."
+    "MyCgmApp MCP Server"
 )
 
 @mcp.tool()
