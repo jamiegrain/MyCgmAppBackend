@@ -24,6 +24,23 @@ def set_activity_status(status: bool):
         upsert=True
     )
 
+def get_garmin_tokens():
+    """Query: find the entry where name is 'garmin_tokens'"""
+    collection = _get_collection()
+    doc = collection.find_one({"name": "garmin_tokens"})
+    if doc:
+        return doc.get('value')
+    return None
+
+def save_garmin_tokens(token_str: str):
+    """Query: set/update the value for 'garmin_tokens'"""
+    collection = _get_collection()
+    collection.update_one(
+        {"name": "garmin_tokens"},
+        {"$set": {"value": token_str}},
+        upsert=True
+    )
+
 
 def _get_collection():
     conn_string = os.environ.get("FIRESTORE_CONN_STRING")
