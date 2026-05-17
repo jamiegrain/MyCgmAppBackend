@@ -1,8 +1,20 @@
 import os
 import hashlib
 import requests
-import functions_framework
-from flask import jsonify
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from models import LibreResponse
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 BASE_URL = "https://api-eu2.libreview.io/"
 HEADERS = {
@@ -14,35 +26,26 @@ HEADERS = {
     "priority": "u=1, i",
 }
 
-@functions_framework.http
-def hello_http(request):
-    """HTTP Cloud Function replacing the C# logic."""
-    if request.method == 'OPTIONS':
-        headers = {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Max-Age': '3600'
-        }
-        return ('', 204, headers)
-
+@app.get("/")
+def get_libre_data():
+    """HTTP FastAPI route using Pydantic models."""
     username = os.environ.get("LIBRE_USER")
     password = os.environ.get("LIBRE_PASS")
 
-    cors_headers = {'Access-Control-Allow-Origin': '*'}
-
     if not username or not password:
-        return jsonify({"error": "Missing Libre credentials in environment variables."}), 401, cors_headers
+        raise HTTPException(status_code=401, detail="Missing Libre credentials in environment variables.")
 
     try:
         login_details = login(username, password)
         graph_text = fetch_glucose_data(login_details)
         
-        headers = {**cors_headers, 'Content-Type': 'application/json'}
-        return graph_text, 200, headers
+        # Validate and serialize using Pydantic
+        libre_data = LibreResponse.model_validate_json(graph_text)
+        
+        return libre_data
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500, cors_headers
+        raise HTTPException(status_code=500, detail=str(e))
 
 def login(username, password):
     url = f"{BASE_URL}llu/auth/login"

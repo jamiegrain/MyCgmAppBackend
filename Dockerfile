@@ -29,5 +29,5 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Expose the port used by Cloud Run
 EXPOSE 8080
 
-# Run the function using the Functions Framework
-CMD ["functions-framework", "--target=hello_http"]
+# Run the FastAPI app using uvicorn (respecting Cloud Run's PORT env var if set)
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}

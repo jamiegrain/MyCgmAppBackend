@@ -6,8 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "curl-cffi>=0.15.0",
-    "functions-framework>=3.10.1",
+    "fastapi>=0.136.1",
     "garminconnect>=0.3.3",
     "google-cloud-secret-manager>=2.27.0",
+    "pandas>=3.0.2",
+    "pydantic>=2.13.3",
+    "pymongo>=4.17.0",
     "requests>=2.33.1",
+    "uvicorn>=0.46.0",
 ]
