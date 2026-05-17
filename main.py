@@ -3,8 +3,10 @@ import hashlib
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from models import LibreResponse
+from settings.settings import get_activity_status, set_activity_status
 
 app = FastAPI()
 
@@ -44,6 +46,25 @@ def get_libre_data():
         
         return libre_data
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ActivityStatusRequest(BaseModel):
+    isActivityInProgress: bool
+
+@app.get("/settings/activity")
+def get_activity():
+    try:
+        status = get_activity_status()
+        return {"isActivityInProgress": status}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/settings/activity")
+def set_activity(request: ActivityStatusRequest):
+    try:
+        set_activity_status(request.isActivityInProgress)
+        return {"success": True, "isActivityInProgress": request.isActivityInProgress}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
