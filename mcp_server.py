@@ -2,6 +2,7 @@ import os
 import json
 import logging
 from fastmcp import FastMCP
+from fastapi import FastAPI
 
 # Import existing backend logic
 from main import login, fetch_glucose_data
@@ -61,14 +62,13 @@ def echo_test(message: str) -> str:
 #     except Exception as e:
 #         return f"Error fetching Garmin activities: {str(e)}"
 
-# --- WEB WRAPPER FOR CLOUD RUN COMPATIBILITY ---
-# Map FastMCP to FastAPI for robust production routing
-from fastapi import FastAPI
-app = FastAPI()
-
 # FastMCP v3.3.1 provides an ASGI application via http_app()
 # that handles streamable-http connections at the root.
 mcp_sub_app = mcp.http_app(path="/", transport="streamable-http")
+
+# Pass the lifespan of the FastMCP sub-app to the parent FastAPI application
+# so that background task groups are properly initialized.
+app = FastAPI(lifespan=mcp_sub_app.lifespan)
 
 # Mount it so your endpoints are clearly mapped to the root
 app.mount("/", mcp_sub_app)
