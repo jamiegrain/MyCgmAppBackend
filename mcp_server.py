@@ -56,11 +56,20 @@ def get_garmin_activities() -> str:
     except Exception as e:
         return f"Error fetching Garmin activities: {str(e)}"
 
+# --- WEB WRAPPER FOR CLOUD RUN COMPATIBILITY ---
+# Map FastMCP to FastAPI for robust production routing
+from fastapi import FastAPI
+app = FastAPI()
+
+# FastMCP v3.3.1 provides an ASGI application via http_app()
+# that handles SSE connections.
+sse_app = mcp.http_app(transport="sse")
+
+# Mount it so your endpoints are clearly mapped
+app.mount("/", sse_app)
+
 if __name__ == "__main__":
-    # Cloud Run provides the PORT environment variable
+    import uvicorn
     port = int(os.environ.get("PORT", 8080))
-    # SSE or Streamable HTTP are supported for web transport
-    transport = os.environ.get("MCP_TRANSPORT", "sse")
-    
-    logger.info(f"Starting FastMCP Server on port {port} with transport '{transport}'")
-    mcp.run(transport=transport, host="0.0.0.0", port=port)
+    logger.info(f"Starting Production FastMCP Server via Uvicorn on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)

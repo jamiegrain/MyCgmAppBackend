@@ -29,5 +29,5 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Expose the port used by Cloud Run
 EXPOSE 8080
 
-# Run the FastMCP app (it respects Cloud Run's PORT env var)
-CMD ["python", "mcp_server.py"]
+# Run the FastMCP app using uvicorn (respecting Cloud Run's PORT env var if set)
+CMD uvicorn mcp_server:app --host 0.0.0.0 --port ${PORT:-8080}
