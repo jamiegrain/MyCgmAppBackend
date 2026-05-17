@@ -27,6 +27,9 @@ def set_activity_status(status: bool):
 
 def _get_collection():
     conn_string = os.environ.get("FIRESTORE_CONN_STRING")
+    
+    if not conn_string:
+        raise ValueError("FIRESTORE_CONN_STRING environment variable is not set!")
 
     client = MongoClient(
         conn_string, 
