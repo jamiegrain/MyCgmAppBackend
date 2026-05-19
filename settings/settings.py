@@ -41,7 +41,6 @@ def save_garmin_tokens(token_str: str):
         upsert=True
     )
 
-
 def _get_collection():
     conn_string = os.environ.get("FIRESTORE_CONN_STRING")
     
