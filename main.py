@@ -9,9 +9,7 @@ from typing import Optional
 from models import LibreResponse
 from settings.settings import (
     get_activity_status, 
-    set_activity_status,
-    get_vertex_settings,
-    save_vertex_settings
+    set_activity_status
 )
 from vertex_service import VertexService
 
@@ -78,44 +76,6 @@ def set_activity(request: ActivityStatusRequest):
 class VertexQueryRequest(BaseModel):
     text: str
     sessionId: Optional[str] = None
-
-class VertexSettingsRequest(BaseModel):
-    projectId: str
-    agentId: str
-    location: Optional[str] = "global"
-
-@app.get("/settings/vertex")
-def get_vertex_config():
-    try:
-        config = get_vertex_settings()
-        if not config:
-            return {
-                "projectId": os.environ.get("VERTEX_PROJECT_ID") or "",
-                "agentId": os.environ.get("VERTEX_AGENT_ID") or "",
-                "location": os.environ.get("VERTEX_LOCATION") or "global",
-                "configured": bool(os.environ.get("VERTEX_PROJECT_ID") and os.environ.get("VERTEX_AGENT_ID"))
-            }
-        return {
-            "projectId": config.get("project_id", ""),
-            "agentId": config.get("agent_id", ""),
-            "location": config.get("location", "global"),
-            "configured": True
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/settings/vertex")
-def set_vertex_config(request: VertexSettingsRequest):
-    try:
-        config_dict = {
-            "project_id": request.projectId,
-            "agent_id": request.agentId,
-            "location": request.location
-        }
-        save_vertex_settings(config_dict)
-        return {"success": True, "settings": request}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/vertex/query")
 def query_vertex(request: VertexQueryRequest):
