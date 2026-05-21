@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from main import login, fetch_glucose_data
 from models import LibreResponse
 from garmin_service import GarminService
+from calendar_service import CalendarService
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +45,37 @@ def get_garmin_activities() -> str:
         return json.dumps(activities, indent=2, default=str)
     except Exception as e:
         return f"Error fetching Garmin activities: {str(e)}"
+
+@mcp.tool()
+def get_calendar_events(
+    days_back: int = 0,
+    days_forward: int = 7,
+    max_results: int = 250,
+    calendar_id: str = None
+) -> str:
+    """
+    Fetch all-day and multi-day calendar events for a given time window.
+    
+    Args:
+        days_back: Number of days to search backwards (must be non-negative).
+        days_forward: Number of days to search forwards (must be non-negative).
+        max_results: Maximum number of raw events to retrieve from the Google API before filtering.
+        calendar_id: Optional Google Calendar ID. Defaults to the configured main calendar.
+    """
+    if days_back < 0 or days_forward < 0:
+        return "Error: days_back and days_forward parameters must be non-negative integers."
+        
+    try:
+        service = CalendarService()
+        events = service.get_upcoming_events(
+            days_back=days_back,
+            days_forward=days_forward,
+            max_results=max_results,
+            calendar_id=calendar_id
+        )
+        return json.dumps(events, indent=2)
+    except Exception as e:
+        return f"Error fetching calendar events: {str(e)}"
 
 # FastMCP v3.3.1 provides an ASGI application via http_app()
 # that handles streamable-http connections at the root.
