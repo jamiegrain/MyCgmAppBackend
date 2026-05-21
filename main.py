@@ -12,6 +12,7 @@ from settings.settings import (
     set_activity_status
 )
 from vertex_service import VertexService
+from calendar_service import CalendarService
 
 app = FastAPI()
 
@@ -92,6 +93,17 @@ def query_vertex(request: VertexQueryRequest):
         return {"response": response_text, "sessionId": active_session_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/calendar/events")
+def get_calendar_events(max_results: int = 10, calendar_id: Optional[str] = None):
+    try:
+        service = CalendarService()
+        events = service.get_upcoming_events(max_results=max_results, calendar_id=calendar_id)
+        return {"success": True, "calendarId": calendar_id or service.calendar_id, "events": events}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 def login(username, password):
