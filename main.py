@@ -1,8 +1,5 @@
-import os
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from google.adk.cli.fast_api import get_fast_api_app
 
 from endpoints import (
     libre_router,
@@ -12,25 +9,7 @@ from endpoints import (
     vertex_router
 )
 
-# Import custom ADK services to register custom schemes (e.g., firestore://)
-from agents import services
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.join(CURRENT_DIR, "agents")
-
-# Module-level environment constant (True if running locally on your Mac, False if deployed on Cloud Run)
-IS_LOCAL = "K_SERVICE" not in os.environ
-
-# Automatically determine session persistence based on environment:
-default_db_url = f"sqlite:///{os.path.join(BASE_DIR, 'sessions.db')}" if IS_LOCAL else "firestore://"
-SESSION_DB_URL = os.getenv("SESSION_DB_URL", default_db_url)
-
-app: FastAPI = get_fast_api_app(
-    agents_dir=BASE_DIR,
-    session_service_uri=SESSION_DB_URL,
-    allow_origins=["*"],  # In production, restrict this
-    web=IS_LOCAL,  # Enable the ADK Web UI only for local development
-)
+app = FastAPI(title="MyCGM App Backend")
 
 app.add_middleware(
     CORSMiddleware,
