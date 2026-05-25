@@ -12,6 +12,9 @@ from endpoints import (
     vertex_router
 )
 
+# Import custom ADK services to register custom schemes (e.g., firestore://)
+from agents import services
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.join(CURRENT_DIR, "agents")
 
