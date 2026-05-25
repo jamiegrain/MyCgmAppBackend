@@ -2,6 +2,9 @@ import os
 import hashlib
 import requests
 import logging
+import pandas as pd
+from datetime import datetime, timezone, timedelta
+from typing import Optional
 from models import LibreResponse
 
 _logger = logging.getLogger(__name__)
@@ -71,7 +74,7 @@ class LibreService:
             _logger.error(f"Exception during LibreView glucose data fetch: {e}")
             raise
 
-    def get_glucose_data(self) -> LibreResponse:
+    def fetch_and_validate_glucose_data(self) -> LibreResponse:
         _logger.info("Initiating high-level LibreView glucose data retrieval...")
         username = os.environ.get("LIBRE_USER")
         password = os.environ.get("LIBRE_PASS")
@@ -96,9 +99,118 @@ class LibreService:
     def get_libre_glucose_data(self) -> str:
         """Fetch current CGM glucose data from LibreView."""
         try:
-            libre_data = self.get_glucose_data()
+            libre_data = self.fetch_and_validate_glucose_data()
             return libre_data.model_dump_json(indent=2)
         except Exception as e:
             _logger.error(f"Error fetching Libre glucose data for agent: {e}")
             return f"Error fetching Libre glucose data: {str(e)}"
+
+    def _get_latest_bigquery_timestamp(self, client, full_table_id: str) -> Optional[datetime]:
+        """Query BigQuery to find the latest timestamp we have successfully uploaded."""
+        try:
+            query = f"SELECT MAX(device_timestamp) as max_ts FROM `{full_table_id}`"
+            query_job = client.query(query)
+            results = query_job.result()
+            for row in results:
+                return row.max_ts  # Returns timezone-aware datetime or None
+        except Exception as e:
+            _logger.warning(f"Could not fetch BigQuery watermark (table may not exist yet): {e}")
+            return None
+
+    def _upload_incremental_to_bigquery(self, df: pd.DataFrame, dataset_id: str, table_id: str, project_id: str = None) -> pd.DataFrame:
+        """Fetch watermark from BigQuery, filter for new data, and append only delta rows."""
+        try:
+            from google.cloud import bigquery
+            _logger.info(f"Preparing incremental upload to BigQuery ({dataset_id}.{table_id})...")
+            
+            client = bigquery.Client(project=project_id)
+            full_table_id = f"{client.project}.{dataset_id}.{table_id}"
+            
+            # 1. Fetch watermark
+            max_ts = self._get_latest_bigquery_timestamp(client, full_table_id)
+            
+            if max_ts is not None:
+                _logger.info(f"Found existing BigQuery watermark: {max_ts}")
+                if df["device_timestamp"].dt.tz is None:
+                    df["device_timestamp"] = df["device_timestamp"].dt.tz_localize("UTC")
+                df = df[df["device_timestamp"] > max_ts]
+            else:
+                _logger.info("No watermark found. Initiating full table load/creation...")
+
+            if df.empty:
+                _logger.info("BigQuery is already up to date. No new records to upload.")
+                return df
+
+            # Define table schema configuration
+            job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField("device_timestamp", "TIMESTAMP", mode="REQUIRED"),
+                    bigquery.SchemaField("record_type", "INTEGER", mode="REQUIRED"),
+                    bigquery.SchemaField("historic_glucose", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("scan_glucose", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("rapid_acting_insulin", "FLOAT", mode="NULLABLE"),
+                ],
+                time_partitioning=bigquery.TimePartitioning(
+                    type_=bigquery.TimePartitioningType.DAY,
+                    field="device_timestamp"
+                ),
+                clustering_fields=["record_type"],
+                write_disposition="WRITE_APPEND"
+            )
+            
+            _logger.info(f"Appending {len(df):,} new records directly to BigQuery (Table: {full_table_id})...")
+            job = client.load_table_from_dataframe(df, full_table_id, job_config=job_config)
+            job.result()
+            _logger.info(f"Success! Appended {len(df):,} rows directly into partitioned table '{full_table_id}'!")
+            return df
+            
+        except Exception as e:
+            _logger.error(f"Error uploading incrementally to BigQuery: {e}")
+            raise e
+
+    def upload_recent_to_bigquery(self, hours: int = 12, dataset_id: str = "my_cgm_dataset", table_id: str = "glucose_records") -> int:
+        """Fetch latest glucose data from LibreView, filter for recent hours, and upload new delta records to BigQuery."""
+        _logger.info(f"Running scheduled recent upload to BigQuery (last {hours} hours)...")
+        libre_data = self.fetch_and_validate_glucose_data()
+        
+        records = []
+        now = datetime.now(timezone.utc)
+        cutoff_time = now - timedelta(hours=hours)
+        
+        for entry in libre_data.data.graphData:
+            # Parse timestamp
+            ts = pd.to_datetime(entry.Timestamp)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+                
+            # Filter for the last twelve hours
+            if ts < cutoff_time:
+                continue
+                
+            record_type = int(entry.type)
+            val = float(entry.Value)
+            
+            records.append({
+                "device_timestamp": ts,
+                "record_type": record_type,
+                "historic_glucose": val if record_type == 0 else None,
+                "scan_glucose": val if record_type == 1 else None,
+                "rapid_acting_insulin": None
+            })
+            
+        if not records:
+            _logger.info(f"No records found matching the last {hours} hours window.")
+            return 0
+            
+        df = pd.DataFrame(records)
+        df["record_type"] = df["record_type"].astype(int)
+        df["historic_glucose"] = pd.to_numeric(df["historic_glucose"], errors="coerce")
+        df["scan_glucose"] = pd.to_numeric(df["scan_glucose"], errors="coerce")
+        df["rapid_acting_insulin"] = pd.to_numeric(df["rapid_acting_insulin"], errors="coerce")
+        
+        # Perform incremental upload
+        uploaded_df = self._upload_incremental_to_bigquery(df, dataset_id, table_id)
+        return len(uploaded_df) if uploaded_df is not None else 0
 
