@@ -1,8 +1,6 @@
 import os
 import json
 import logging
-from fastmcp import FastMCP
-from fastapi import FastAPI
 
 # Import existing backend logic
 from main import login, fetch_glucose_data
@@ -14,12 +12,7 @@ from calendar_service import CalendarService
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastMCP Server
-mcp = FastMCP(
-    "MyCgmApp MCP Server"
-)
 
-@mcp.tool()
 def get_libre_glucose_data() -> str:
     """Fetch current CGM glucose data from LibreView."""
     username = os.environ.get("LIBRE_USER")
@@ -36,7 +29,7 @@ def get_libre_glucose_data() -> str:
     except Exception as e:
         return f"Error fetching Libre glucose data: {str(e)}"
 
-@mcp.tool()
+
 def get_garmin_activities() -> str:
     """Fetch recent Garmin activities for the last week."""
     try:
@@ -46,7 +39,7 @@ def get_garmin_activities() -> str:
     except Exception as e:
         return f"Error fetching Garmin activities: {str(e)}"
 
-@mcp.tool()
+
 def get_calendar_events(
     days_back: int = 0,
     days_forward: int = 7,
@@ -77,19 +70,4 @@ def get_calendar_events(
     except Exception as e:
         return f"Error fetching calendar events: {str(e)}"
 
-# FastMCP v3.3.1 provides an ASGI application via http_app()
-# that handles streamable-http connections at the root.
-mcp_sub_app = mcp.http_app(path="/", transport="streamable-http")
 
-# Pass the lifespan of the FastMCP sub-app to the parent FastAPI application
-# so that background task groups are properly initialized.
-app = FastAPI(lifespan=mcp_sub_app.lifespan)
-
-# Mount it so your endpoints are clearly mapped to the root
-app.mount("/", mcp_sub_app)
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Starting Production FastMCP Server via Uvicorn on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)

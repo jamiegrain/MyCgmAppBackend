@@ -1,107 +1,60 @@
 import os
 import uuid
 import logging
-import requests
-import google.auth
-import google.auth.transport.requests
+from google import genai
+from google.genai import types
+
+from tools import get_libre_glucose_data, get_garmin_activities, get_calendar_events
 
 logger = logging.getLogger(__name__)
 
 class VertexService:
     """
-    A service to interact with Vertex AI Agents (CES / Gen AI Playbooks) via the runSession REST API.
+    A service that runs your Gemini 2.5 Agent directly inside your existing backend.
+    It utilizes the new google-genai SDK with automatic function calling on your tools.
     """
     def __init__(self):
-        self.project_id = os.getenv("VERTEX_PROJECT_ID")
-        self.location = os.getenv("VERTEX_LOCATION", "us")
+        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         self.agent_id = os.getenv("VERTEX_AGENT_ID")
-        self.app_version = os.getenv("VERTEX_APP_VERSION")
-        self.deployment = os.getenv("VERTEX_DEPLOYMENT")
-        self.creds = None
+        self.client = genai.Client()
 
     def ask(self, text: str, session_id: str = None) -> str:
         """
-        Sends a query to the Vertex CES Playbook agent and returns the text response.
+        Queries Gemini 2.5 with automatic function calling over your LibreView, Garmin, and Calendar tools.
         """
-        if not self.project_id or not self.agent_id:
-            raise ValueError(
-                "Vertex Agent is not configured. Please set VERTEX_PROJECT_ID and VERTEX_AGENT_ID in .env."
-            )
 
-        # Get Google Application Default Credentials (ADC)
-        if self.creds is None:
-            self.creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-            
-        # Refresh the credentials to get a fresh access token
-        auth_req = google.auth.transport.requests.Request()
-        self.creds.refresh(auth_req)
 
-        # Use or generate a transient session ID
         active_session_id = session_id or str(uuid.uuid4())
-        
-        # Build the session path
-        session_path = f"projects/{self.project_id}/locations/{self.location}/apps/{self.agent_id}/sessions/{active_session_id}"
-        url = f"https://ces.googleapis.com/v1beta/{session_path}:runSession"
-        
-        headers = {
-            "Authorization": f"Bearer {self.creds.token}",
-            "Content-Type": "application/json"
-        }
+        logger.info(f"Querying Gemini 2.5 local agent (Session: {active_session_id})")
 
-        # Build request payload
-        config = {
-            "session": session_path
-        }
-        if self.app_version:
-            config["app_version"] = self.app_version
-        if self.deployment:
-            config["deployment"] = self.deployment
+        # Configure the tools available to the model
+        tools = [get_libre_glucose_data, get_garmin_activities, get_calendar_events]
 
-        payload = {
-            "config": config,
-            "inputs": [
-                {
-                    "text": text
-                }
-            ]
-        }
+        # Instruct the model on how to act, retrieve data, and present its findings
+        system_instruction = (
+            "You are an encouraging, highly professional personal health and fitness AI assistant. "
+            "You have access to the user's LibreView Continuous Glucose Monitor (CGM) data, "
+            "recent Garmin activity/fitness logs, and Google Calendar schedules. "
+            "Use these tools to fetch real-time or historical data when asked questions about the user's health. "
+            "Analyze relationships between physical activity (Garmin) and glucose patterns (CGM), "
+            "and suggest correlation insights. "
+        )
 
-        logger.info(f"Querying CES agent runSession: {url}")
-        
+        config = types.GenerateContentConfig(
+            tools=tools,
+            system_instruction=system_instruction,
+            temperature=0.2  # Low temperature for precise analytical insights
+        )
+
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            if not response.ok:
-                raise Exception(f"HTTP {response.status_code}: {response.text}")
-                
-            res_json = response.json()
-            logger.info("Successfully received response from CES runSession API.")
-            
-            # CES runSession returns a structured JSON payload containing the conversation turns/outputs.
-            # Let's extract the textual response from the payload dynamically.
-            text_outputs = []
-            
-            def extract_text(data):
-                if isinstance(data, dict):
-                    for k, v in data.items():
-                        if k == "text" and isinstance(v, str):
-                            text_outputs.append(v)
-                        else:
-                            extract_text(v)
-                elif isinstance(data, list):
-                    for item in data:
-                        extract_text(item)
-                        
-            extract_text(res_json)
-            
-            if text_outputs:
-                # Deduplicate and filter out reflected user query if present
-                unique_outputs = list(dict.fromkeys(t.strip() for t in text_outputs if t.strip().lower() != text.strip().lower()))
-                if unique_outputs:
-                    return "\n\n".join(unique_outputs)
-                return "\n\n".join(list(dict.fromkeys(t.strip() for t in text_outputs)))
-                
-            return str(res_json)
-            
+            # We use gemini-2.5-flash as the default model
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=text,
+                config=config
+            )
+            logger.info("Successfully received response from local Gemini 2.5 Agent.")
+            return response.text
         except Exception as e:
-            logger.error(f"Error querying CES runSession: {e}")
+            logger.error(f"Gemini local agent query failed: {e}")
             raise e

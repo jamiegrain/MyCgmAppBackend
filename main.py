@@ -1,8 +1,11 @@
 import os
+
 import hashlib
 import requests
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from google.adk.cli.fast_api import get_fast_api_app
 from pydantic import BaseModel
 
 from typing import Optional
@@ -13,7 +16,22 @@ from settings.settings import (
 )
 from vertex_service import VertexService
 
-app = FastAPI()
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.join(CURRENT_DIR, "agents")
+
+# Module-level environment constant (True if running locally on your Mac, False if deployed on Cloud Run)
+IS_LOCAL = "K_SERVICE" not in os.environ
+
+# Automatically determine session persistence based on environment:
+default_db_url = f"sqlite:///{os.path.join(BASE_DIR, 'sessions.db')}" if IS_LOCAL else "firestore://"
+SESSION_DB_URL = os.getenv("SESSION_DB_URL", default_db_url)
+
+app: FastAPI = get_fast_api_app(
+    agents_dir=BASE_DIR,
+    session_service_uri=SESSION_DB_URL,
+    allow_origins=["*"],  # In production, restrict this
+    web=IS_LOCAL,  # Enable the ADK Web UI only for local development
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,7 +102,7 @@ def query_vertex(request: VertexQueryRequest):
         if not service.project_id or not service.agent_id:
             raise HTTPException(
                 status_code=400,
-                detail="Vertex AI Agent is not configured. Please set environment variables (VERTEX_PROJECT_ID, VERTEX_AGENT_ID) or configure them via settings."
+                detail="Vertex AI Agent is not configured. Please set environment variables (GOOGLE_CLOUD_PROJECT, VERTEX_AGENT_ID) or configure them via settings."
             )
         import uuid
         active_session_id = request.sessionId or str(uuid.uuid4())
@@ -92,8 +110,6 @@ def query_vertex(request: VertexQueryRequest):
         return {"response": response_text, "sessionId": active_session_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
 
 def login(username, password):
     url = f"{BASE_URL}llu/auth/login"
