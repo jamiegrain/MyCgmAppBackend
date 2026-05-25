@@ -1,22 +1,27 @@
+import logging
 import os
 
 from pymongo import MongoClient
 import certifi
 
+_logger = logging.getLogger(__name__)
+
 def get_activity_status():
     """Query: find the entry where name is 'isActivityInProgress'"""
+
+    _logger.info("Fetching activity status from settings DB")
     
     collection = _get_collection()
 
     doc = collection.find_one({"name": "isActivityInProgress"})
     
     if doc:
-        print(f"Status: {doc.get('value')}")
         return doc.get('value')
     return None
 
 def set_activity_status(status: bool):
     """Query: set/update the value for 'isActivityInProgress'"""
+    _logger.info("Setting activity status in settings DB")
     collection = _get_collection()
     collection.update_one(
         {"name": "isActivityInProgress"},
@@ -24,12 +29,12 @@ def set_activity_status(status: bool):
         upsert=True
     )
 
-def get_garmin_tokens():
+def get_garmin_tokens() -> str:
     """Query: find the entry where name is 'garmin_tokens'"""
     collection = _get_collection()
     doc = collection.find_one({"name": "garmin_tokens"})
     if doc:
-        return doc.get('value')
+        return doc.get('value') if doc.get('value') else None
     return None
 
 def save_garmin_tokens(token_str: str):
