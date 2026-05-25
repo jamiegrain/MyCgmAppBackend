@@ -3,7 +3,6 @@ import json
 import logging
 
 # Import existing backend logic
-from main import login, fetch_glucose_data
 from models import LibreResponse
 from garmin_service import GarminService
 from calendar_service import CalendarService
@@ -15,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 def get_libre_glucose_data() -> str:
     """Fetch current CGM glucose data from LibreView."""
+    from main import login, fetch_glucose_data
+    
     username = os.environ.get("LIBRE_USER")
     password = os.environ.get("LIBRE_PASS")
 
