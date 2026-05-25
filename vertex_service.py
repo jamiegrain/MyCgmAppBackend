@@ -38,6 +38,7 @@ class VertexService:
             "Use these tools to fetch real-time or historical data when asked questions about the user's health. "
             "Analyze relationships between physical activity (Garmin) and glucose patterns (CGM), "
             "and suggest correlation insights. "
+            "All measures are in mmol/L"
         )
 
         config = types.GenerateContentConfig(
