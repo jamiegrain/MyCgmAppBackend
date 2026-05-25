@@ -4,7 +4,7 @@ import logging
 from google import genai
 from google.genai import types
 
-from tools import get_libre_glucose_data, get_garmin_activities, get_calendar_events
+from services import LibreService, GarminService, CalendarService
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,17 @@ class VertexService:
         active_session_id = session_id or str(uuid.uuid4())
         logger.info(f"Querying Gemini 2.5 local agent (Session: {active_session_id})")
 
-        # Configure the tools available to the model
-        tools = [get_libre_glucose_data, get_garmin_activities, get_calendar_events]
+        # Instantiate services dynamically
+        libre_service = LibreService()
+        garmin_service = GarminService()
+        calendar_service = CalendarService()
+
+        # Configure the tools available to the model using bound service methods
+        tools = [
+            libre_service.get_libre_glucose_data,
+            garmin_service.get_garmin_activities,
+            calendar_service.get_calendar_events
+        ]
 
         # Instruct the model on how to act, retrieve data, and present its findings
         system_instruction = (
@@ -38,7 +47,6 @@ class VertexService:
             "and suggest correlation insights. "
             "All measures are in mmol/L."
             "We are in debug mode, so any errors should be reported back to the user."
-
         )
 
         config = types.GenerateContentConfig(
