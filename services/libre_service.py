@@ -105,6 +105,240 @@ class LibreService:
             _logger.error(f"Error fetching Libre glucose data for agent: {e}")
             return f"Error fetching Libre glucose data: {str(e)}"
 
+    def upload_recent_to_bigquery(self, hours: int = 12, dataset_id: str = "my_cgm_dataset", table_id: str = "glucose_records") -> int:
+        """Fetch latest glucose data from LibreView, filter for recent hours, and upload new delta records to BigQuery."""
+        _logger.info(f"Running scheduled recent upload to BigQuery (last {hours} hours)...")
+        libre_data = self.fetch_and_validate_glucose_data()
+        
+        records = []
+        now = datetime.now(timezone.utc)
+        cutoff_time = now - timedelta(hours=hours)
+        
+        for entry in libre_data.data.graphData:
+            # Parse timestamp
+            ts = pd.to_datetime(entry.Timestamp)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+                
+            # Filter for the last twelve hours
+            if ts < cutoff_time:
+                continue
+                
+            record_type = int(entry.type)
+            val = float(entry.Value)
+            
+            records.append({
+                "device_timestamp": ts,
+                "record_type": record_type,
+                "historic_glucose": val if record_type == 0 else None,
+                "scan_glucose": val if record_type == 1 else None,
+                "rapid_acting_insulin": None
+            })
+            
+        if not records:
+            _logger.info(f"No records found matching the last {hours} hours window.")
+            return 0
+            
+        df = pd.DataFrame(records)
+        df["record_type"] = df["record_type"].astype(int)
+        df["historic_glucose"] = pd.to_numeric(df["historic_glucose"], errors="coerce")
+        df["scan_glucose"] = pd.to_numeric(df["scan_glucose"], errors="coerce")
+        df["rapid_acting_insulin"] = pd.to_numeric(df["rapid_acting_insulin"], errors="coerce")
+        
+        # Perform incremental upload
+        uploaded_df = self._upload_incremental_to_bigquery(df, dataset_id, table_id)
+        return len(uploaded_df) if uploaded_df is not None else 0
+
+    def get_glucose_statistics(self, days: int = 7) -> str:
+        """
+        Get high-level summary statistics (average, standard deviation, range, estimated GMI) for the last N days.
+        Use this tool when the user asks questions like: 'What was my average glucose last week?' or 'How stable was my blood sugar?'
+        """
+        try:
+            from google.cloud import bigquery
+            full_table_id = self._get_full_table_id()
+            _logger.info(f"Computing glucose statistics over the last {days} days from BigQuery...")
+            
+            query = f"""
+                SELECT 
+                    ROUND(AVG(historic_glucose), 2) as avg_glucose,
+                    ROUND(STDDEV(historic_glucose), 2) as std_glucose,
+                    ROUND(MIN(historic_glucose), 1) as min_glucose,
+                    ROUND(MAX(historic_glucose), 1) as max_glucose,
+                    COUNT(historic_glucose) as total_readings
+                FROM `{full_table_id}`
+                WHERE device_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+            """
+            params = [bigquery.ScalarQueryParameter("days", "INT64", days)]
+            df = self._run_bigquery_query(query, params)
+            
+            if df.empty or df["avg_glucose"].iloc[0] is None:
+                return f"No glucose data found in BigQuery for the last {days} days."
+                
+            row = df.iloc[0]
+            avg_mmol = float(row["avg_glucose"])
+            # Estimate GMI (Glucose Management Indicator) which approximates HbA1c
+            avg_mgdl = avg_mmol * 18.0182
+            gmi = 3.31 + (0.02392 * avg_mgdl)
+            
+            summary = (
+                f"📈 **Glucose Statistics (Last {days} Days)**\n"
+                f"- **Average Glucose**: {avg_mmol:.2f} mmol/L\n"
+                f"- **Standard Deviation (Variability)**: {float(row['std_glucose']):.2f} mmol/L\n"
+                f"- **Glucose Range**: {float(row['min_glucose']):.1f} - {float(row['max_glucose']):.1f} mmol/L\n"
+                f"- **Estimated GMI (HbA1c Equivalent)**: {gmi:.2f}%\n"
+                f"- **Total Automatic Readings**: {int(row['total_readings']):,}\n"
+            )
+            return summary
+        except Exception as e:
+            _logger.error(f"Failed to fetch glucose statistics: {e}")
+            return f"Error retrieving glucose statistics: {str(e)}"
+
+    def get_time_in_range(self, days: int = 7, target_low: float = 3.9, target_high: float = 10.0) -> str:
+        """
+        Calculate percentage of time spent in range (TIR), below range (hypoglycemia), and above range (hyperglycemia) for the last N days.
+        Use this tool when the user asks questions like: 'What was my time in range last week?' or 'How often was I low?'
+        """
+        try:
+            from google.cloud import bigquery
+            full_table_id = self._get_full_table_id()
+            _logger.info(f"Computing Time in Range over the last {days} days from BigQuery...")
+            
+            query = f"""
+                SELECT 
+                    ROUND(COUNTIF(historic_glucose >= @low AND historic_glucose <= @high) / COUNT(historic_glucose) * 100, 1) as in_range_pct,
+                    ROUND(COUNTIF(historic_glucose < @low) / COUNT(historic_glucose) * 100, 1) as below_range_pct,
+                    ROUND(COUNTIF(historic_glucose > @high) / COUNT(historic_glucose) * 100, 1) as above_range_pct,
+                    COUNT(historic_glucose) as total_readings
+                FROM `{full_table_id}`
+                WHERE device_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+            """
+            params = [
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("low", "FLOAT64", target_low),
+                bigquery.ScalarQueryParameter("high", "FLOAT64", target_high)
+            ]
+            df = self._run_bigquery_query(query, params)
+            
+            if df.empty or df["total_readings"].iloc[0] == 0 or df["in_range_pct"].iloc[0] is None:
+                return f"No glucose data found in BigQuery for the last {days} days."
+                
+            row = df.iloc[0]
+            summary = (
+                f"🎯 **Time in Range (Last {days} Days, Target: {target_low} - {target_high} mmol/L)**\n"
+                f"- **Time in Range (TIR)**: {float(row['in_range_pct']):.1f}%\n"
+                f"- **Time Below Range (TBR - Hypo)**: {float(row['below_range_pct']):.1f}%\n"
+                f"- **Time Above Range (TAR - Hyper)**: {float(row['above_range_pct']):.1f}%\n"
+                f"- **Total Readings Evaluated**: {int(row['total_readings']):,}\n"
+            )
+            return summary
+        except Exception as e:
+            _logger.error(f"Failed to fetch Time in Range: {e}")
+            return f"Error retrieving Time in Range: {str(e)}"
+
+    def get_hourly_glucose_patterns(self, days: int = 14) -> str:
+        """
+        Get hourly average glucose patterns (diurnal profile) over the last N days to identify daily trends (e.g. dawn phenomenon, spikes after certain meal hours).
+        Use this tool when the user asks questions like: 'Do I tend to spike in the mornings?' or 'What is my average daily diurnal pattern?'
+        """
+        try:
+            from google.cloud import bigquery
+            full_table_id = self._get_full_table_id()
+            _logger.info(f"Computing hourly glucose patterns over the last {days} days from BigQuery...")
+            
+            query = f"""
+                SELECT 
+                    EXTRACT(HOUR FROM device_timestamp AT TIME ZONE "UTC") as hour_of_day,
+                    ROUND(AVG(historic_glucose), 2) as avg_glucose,
+                    ROUND(STDDEV(historic_glucose), 2) as std_glucose,
+                    COUNT(*) as readings_count
+                FROM `{full_table_id}`
+                WHERE device_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+                GROUP BY hour_of_day
+                ORDER BY hour_of_day
+            """
+            params = [bigquery.ScalarQueryParameter("days", "INT64", days)]
+            df = self._run_bigquery_query(query, params)
+            
+            if df.empty:
+                return f"No hourly data patterns found for the last {days} days."
+                
+            lines = [
+                f"📅 **Hourly Glucose Diurnal Patterns (Last {days} Days, UTC hour)**\n", 
+                "| Hour | Avg Glucose (mmol/L) | Variability (StdDev) |", 
+                "| :---: | :---: | :---: |"
+            ]
+            for _, row in df.iterrows():
+                hour = int(row["hour_of_day"])
+                avg = float(row["avg_glucose"])
+                std = float(row["std_glucose"])
+                lines.append(f"| {hour:02d}:00 | {avg:.2f} | {std:.2f} |")
+                
+            return "\n".join(lines)
+        except Exception as e:
+            _logger.error(f"Failed to fetch hourly glucose patterns: {e}")
+            return f"Error retrieving hourly glucose patterns: {str(e)}"
+
+    def get_glucose_extreme_events(self, days: int = 7, threshold_low: float = 3.9, threshold_high: float = 10.0) -> str:
+        """
+        Retrieve recent extreme glucose events (hypoglycemia < 3.9 mmol/L and hyperglycemia > 10.0 mmol/L) to diagnose spikes/dips.
+        Use this tool when the user asks questions like: 'Did I have any spikes yesterday?' or 'How many low events did I experience last week?'
+        """
+        try:
+            from google.cloud import bigquery
+            full_table_id = self._get_full_table_id()
+            _logger.info(f"Fetching recent extreme glucose events over the last {days} days from BigQuery...")
+            
+            query = f"""
+                SELECT 
+                    FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S UTC', device_timestamp) as formatted_time,
+                    record_type,
+                    historic_glucose,
+                    scan_glucose
+                FROM `{full_table_id}`
+                WHERE device_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+                  AND (historic_glucose < @low OR historic_glucose > @high OR scan_glucose < @low OR scan_glucose > @high)
+                ORDER BY device_timestamp DESC
+                LIMIT 30
+            """
+            params = [
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("low", "FLOAT64", threshold_low),
+                bigquery.ScalarQueryParameter("high", "FLOAT64", threshold_high)
+            ]
+            df = self._run_bigquery_query(query, params)
+            
+            if df.empty:
+                return f"✨ Outstanding! No extreme low (< {threshold_low} mmol/L) or high (> {threshold_high} mmol/L) events found in the last {days} days."
+                
+            lines = [
+                f"🚨 **Extreme Glucose Events (Last {days} Days)**\n", 
+                "| Timestamp | Type | Value (mmol/L) | Severity |", 
+                "| :--- | :---: | :---: | :--- |"
+            ]
+            for _, row in df.iterrows():
+                ts_str = str(row["formatted_time"])
+                rec_type = int(row["record_type"])
+                hist_val = row["historic_glucose"]
+                scan_val = row["scan_glucose"]
+                
+                val = float(hist_val if pd.notnull(hist_val) else scan_val)
+                type_label = "Auto-recorded" if rec_type == 0 else "Active Scan"
+                
+                if val < threshold_low:
+                    severity = "🔴 Low (Hypoglycemia)"
+                else:
+                    severity = "🟡 High (Hyperglycemia)"
+                    
+                lines.append(f"| {ts_str} | {type_label} | {val:.1f} | {severity} |")
+                
+            return "\n".join(lines)
+        except Exception as e:
+            _logger.error(f"Failed to fetch extreme glucose events: {e}")
+            return f"Error retrieving extreme events: {str(e)}"
+
     def _get_latest_bigquery_timestamp(self, client, full_table_id: str) -> Optional[datetime]:
         """Query BigQuery to find the latest timestamp we have successfully uploaded."""
         try:
@@ -168,49 +402,24 @@ class LibreService:
             _logger.error(f"Error uploading incrementally to BigQuery: {e}")
             raise e
 
-    def upload_recent_to_bigquery(self, hours: int = 12, dataset_id: str = "my_cgm_dataset", table_id: str = "glucose_records") -> int:
-        """Fetch latest glucose data from LibreView, filter for recent hours, and upload new delta records to BigQuery."""
-        _logger.info(f"Running scheduled recent upload to BigQuery (last {hours} hours)...")
-        libre_data = self.fetch_and_validate_glucose_data()
-        
-        records = []
-        now = datetime.now(timezone.utc)
-        cutoff_time = now - timedelta(hours=hours)
-        
-        for entry in libre_data.data.graphData:
-            # Parse timestamp
-            ts = pd.to_datetime(entry.Timestamp)
-            if ts.tzinfo is None:
-                ts = ts.tz_localize("UTC")
-            else:
-                ts = ts.tz_convert("UTC")
-                
-            # Filter for the last twelve hours
-            if ts < cutoff_time:
-                continue
-                
-            record_type = int(entry.type)
-            val = float(entry.Value)
-            
-            records.append({
-                "device_timestamp": ts,
-                "record_type": record_type,
-                "historic_glucose": val if record_type == 0 else None,
-                "scan_glucose": val if record_type == 1 else None,
-                "rapid_acting_insulin": None
-            })
-            
-        if not records:
-            _logger.info(f"No records found matching the last {hours} hours window.")
-            return 0
-            
-        df = pd.DataFrame(records)
-        df["record_type"] = df["record_type"].astype(int)
-        df["historic_glucose"] = pd.to_numeric(df["historic_glucose"], errors="coerce")
-        df["scan_glucose"] = pd.to_numeric(df["scan_glucose"], errors="coerce")
-        df["rapid_acting_insulin"] = pd.to_numeric(df["rapid_acting_insulin"], errors="coerce")
-        
-        # Perform incremental upload
-        uploaded_df = self._upload_incremental_to_bigquery(df, dataset_id, table_id)
-        return len(uploaded_df) if uploaded_df is not None else 0
+    def _get_full_table_id(self, dataset_id: str = "my_cgm_dataset", table_id: str = "glucose_records") -> str:
+        """Helper to dynamically fetch and build the full BigQuery table identifier."""
+        try:
+            from google.cloud import bigquery
+            client = bigquery.Client()
+            return f"{client.project}.{dataset_id}.{table_id}"
+        except Exception:
+            # Fallback using standard configured project ID if client bootstrap fails before setting credentials
+            return f"my-cgm-494710.{dataset_id}.{table_id}"
 
+    def _run_bigquery_query(self, query: str, query_parameters: list = None) -> pd.DataFrame:
+        """Private helper to run a parameter-parameterized query on BigQuery and return a pandas DataFrame."""
+        try:
+            from google.cloud import bigquery
+            client = bigquery.Client()
+            job_config = bigquery.QueryJobConfig(query_parameters=query_parameters) if query_parameters else None
+            query_job = client.query(query, job_config=job_config)
+            return query_job.to_dataframe()
+        except Exception as e:
+            _logger.error(f"Error executing BigQuery query: {e}")
+            raise e

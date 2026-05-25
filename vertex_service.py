@@ -33,15 +33,22 @@ class VertexService:
         # Configure the tools available to the model using bound service methods
         tools = [
             libre_service.get_libre_glucose_data,
+            libre_service.get_glucose_statistics,
+            libre_service.get_time_in_range,
+            libre_service.get_hourly_glucose_patterns,
+            libre_service.get_glucose_extreme_events,
             garmin_service.get_garmin_activities,
+            garmin_service.get_garmin_daily_steps,
+            garmin_service.get_garmin_daily_stress,
+            garmin_service.get_garmin_daily_sleep_and_recovery,
             calendar_service.get_calendar_events
         ]
 
         # Instruct the model on how to act, retrieve data, and present its findings
         system_instruction = (
             "You are an encouraging, highly professional personal health and fitness AI assistant. "
-            "You have access to the user's LibreView Continuous Glucose Monitor (CGM) data, "
-            "recent Garmin activity/fitness logs, and Google Calendar schedules. "
+            "You have access to the user's LibreView Continuous Glucose Monitor (CGM) data (both current stream and rich historical BigQuery stats), "
+            "Garmin activity/fitness logs, daily steps, stress levels, sleep scores, overnight HRV recovery data, and Google Calendar schedules. "
             "Use these tools to fetch real-time or historical data when asked questions about the user's health. "
             "Analyze relationships between physical activity (Garmin) and glucose patterns (CGM), "
             "and suggest correlation insights. "
