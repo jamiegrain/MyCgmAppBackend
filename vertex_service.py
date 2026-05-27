@@ -74,7 +74,7 @@ class VertexService:
         try:
             # We use gemini-2.5-flash as the default model
             response = self.client.models.generate_content(
-                model="gemini-3.1-flash-lite",
+                model="gemini-2.5-pro",
                 contents=text,
                 config=config
             )
