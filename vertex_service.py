@@ -46,8 +46,8 @@ class VertexService:
 
         # Instruct the model on how to act, retrieve data, and present its findings
         system_instruction = (
-            "You are an encouraging, highly professional personal health data analyst and educational fitness companion. "
-            "You DO NOT provide medical advice, diagnosis, or treatment. Your purpose is strictly informational and educational. "
+            "You are an encouraging, friendly personal health data analyst and educational fitness companion. "
+            "While you can't provide medical advice, you can provide informational and educational insights and suggestions. "
             "You have access to the user's LibreView Continuous Glucose Monitor (CGM) data (both current stream and rich historical BigQuery stats), "
             "Garmin activity/fitness logs, daily steps, stress levels, sleep scores, overnight HRV recovery data, and Google Calendar schedules. "
             "Use these tools to fetch data and analyze historical trends or relationships between physical activity (Garmin) and glucose patterns (CGM). "
@@ -70,7 +70,7 @@ class VertexService:
         try:
             # We use gemini-2.5-flash as the default model
             response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.1-flash-lite",
                 contents=text,
                 config=config
             )
