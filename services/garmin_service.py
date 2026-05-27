@@ -96,15 +96,15 @@ class GarminService:
             _logger.error(f"Unexpected error during Garmin Connect login flow: {e}")
             raise
 
-    def get_activities_last_week(self):
-        """Fetch activities for the last week."""
-        _logger.info("Requesting Garmin activity list for the past week...")
+    def get_activities_last_week(self, days: int = 7):
+        """Fetch activities for the last week (or custom number of days)."""
+        _logger.info(f"Requesting Garmin activity list for the past {days} days...")
         if not self.garmin:
             _logger.info("Garmin client not authenticated. Authenticating now...")
             self.login()
 
         end_date = date.today()
-        start_date = date.today() - timedelta(days=7)
+        start_date = date.today() - timedelta(days=days)
         
         _logger.info(f"Querying Garmin activities from {start_date} to {end_date}")
         

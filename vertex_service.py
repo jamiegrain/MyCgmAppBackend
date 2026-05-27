@@ -37,6 +37,10 @@ class VertexService:
             libre_service.get_time_in_range,
             libre_service.get_hourly_glucose_patterns,
             libre_service.get_glucose_extreme_events,
+            libre_service.get_morning_glucose_trends,
+            libre_service.get_day_of_week_trends,
+            libre_service.get_daily_insulin_summary,
+            libre_service.get_exercise_glucose_correlation,
             garmin_service.get_garmin_activities,
             garmin_service.get_garmin_daily_steps,
             garmin_service.get_garmin_daily_stress,
@@ -50,8 +54,8 @@ class VertexService:
             "While you can't provide medical advice, you can provide informational and educational insights and suggestions. "
             "You have access to the user's LibreView Continuous Glucose Monitor (CGM) data (both current stream and rich historical BigQuery stats), "
             "Garmin activity/fitness logs, daily steps, stress levels, sleep scores, overnight HRV recovery data, and Google Calendar schedules. "
-            "Use these tools to fetch data and analyze historical trends or relationships between physical activity (Garmin) and glucose patterns (CGM). "
-            "Present your findings as correlation insights, data summaries, and educational observations.\n\n"
+            "Use these tools to fetch data, analyze cross-sectional trends (morning or day-of-week trends), calculate daily insulin summaries (which serve as indicators of daily insulin resistance where more daily insulin suggests higher resistance), "
+            "and run physical activity correlation analysis to answer questions like 'does my blood sugar tend to go higher on days when I don't exercise'.\n\n"
             "CRITICAL GUIDANCE FOR INSULIN AND RATIO INQUIRIES:\n"
             "- If the user asks about their insulin ratio, insulin-to-carb ratio, correction factor, active insulin, or dosing:\n"
             "  1. State clearly that you cannot calculate, suggest, or recommend insulin dosing or adjust clinical ratios, as this must be done with their physician.\n"

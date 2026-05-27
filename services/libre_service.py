@@ -155,6 +155,7 @@ class LibreService:
         """
         Get high-level summary statistics (average, standard deviation, range, estimated GMI) for the last N days.
         Use this tool when the user asks questions like: 'What was my average glucose last week?' or 'How stable was my blood sugar?'
+        Higher variance (standard deviation) is bad because it implies more variability which is hard to manage.
         """
         try:
             from google.cloud import bigquery
@@ -338,6 +339,415 @@ class LibreService:
         except Exception as e:
             _logger.error(f"Failed to fetch extreme glucose events: {e}")
             return f"Error retrieving extreme events: {str(e)}"
+
+    def get_morning_glucose_trends(self, days: int = 14, start_hour: int = 6, end_hour: int = 10, timezone_str: str = "Europe/London") -> str:
+        """
+        Get cross-sectional morning trends over the last N days (default 14).
+        Focuses on morning hours (e.g. 6:00 AM to 10:00 AM) to track patterns like dawn phenomenon.
+        """
+        try:
+            from google.cloud import bigquery
+            full_table_id = self._get_full_table_id()
+            _logger.info(f"Computing morning glucose trends over the last {days} days from BigQuery...")
+
+            query = f"""
+                SELECT 
+                    DATE(device_timestamp, @timezone) as date_val,
+                    ROUND(AVG(historic_glucose), 2) as avg_glucose,
+                    ROUND(STDDEV(historic_glucose), 2) as std_glucose,
+                    ROUND(MIN(historic_glucose), 1) as min_glucose,
+                    ROUND(MAX(historic_glucose), 1) as max_glucose,
+                    COUNT(historic_glucose) as readings_count
+                FROM `{full_table_id}`
+                WHERE device_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+                  AND EXTRACT(HOUR FROM device_timestamp AT TIME ZONE @timezone) >= @start_hour
+                  AND EXTRACT(HOUR FROM device_timestamp AT TIME ZONE @timezone) < @end_hour
+                GROUP BY date_val
+                ORDER BY date_val DESC
+            """
+            params = [
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("start_hour", "INT64", start_hour),
+                bigquery.ScalarQueryParameter("end_hour", "INT64", end_hour),
+                bigquery.ScalarQueryParameter("timezone", "STRING", timezone_str)
+            ]
+            df = self._run_bigquery_query(query, params)
+
+            if df.empty:
+                return f"No morning glucose data found in BigQuery for the last {days} days."
+
+            lines = [
+                f"🌅 **Morning Glucose Trends (Last {days} Days, {start_hour:02d}:00 - {end_hour:02d}:00 {timezone_str})**\n",
+                "| Date | Avg Glucose (mmol/L) | Variability (StdDev) | Range (Min - Max) | Readings |",
+                "| :--- | :---: | :---: | :---: | :---: |"
+            ]
+
+            total_avg = 0.0
+            total_std = 0.0
+            valid_days = 0
+
+            for _, row in df.iterrows():
+                dt_str = str(row["date_val"])
+                avg = row["avg_glucose"]
+                std = row["std_glucose"]
+                min_g = row["min_glucose"]
+                max_g = row["max_glucose"]
+                count = int(row["readings_count"])
+
+                avg_str = f"{avg:.2f}" if pd.notnull(avg) else "N/A"
+                std_str = f"{std:.2f}" if pd.notnull(std) else "N/A"
+                range_str = f"{min_g:.1f} - {max_g:.1f}" if pd.notnull(min_g) and pd.notnull(max_g) else "N/A"
+
+                if pd.notnull(avg):
+                    total_avg += avg
+                    valid_days += 1
+                if pd.notnull(std):
+                    total_std += std
+
+                lines.append(f"| {dt_str} | {avg_str} | {std_str} | {range_str} | {count} |")
+
+            overall_avg = total_avg / valid_days if valid_days > 0 else 0.0
+            overall_std = total_std / valid_days if valid_days > 0 else 0.0
+
+            lines.append("\n**Summary Statistics:**")
+            lines.append(f"- **Overall Average Morning Glucose**: {overall_avg:.2f} mmol/L")
+            lines.append(f"- **Overall Average Morning Variability**: {overall_std:.2f} mmol/L")
+            lines.append(f"- **Analyzed Days**: {valid_days} days")
+
+            return "\n".join(lines)
+        except Exception as e:
+            _logger.error(f"Failed to fetch morning glucose trends: {e}")
+            return f"Error retrieving morning glucose trends: {str(e)}"
+
+    def get_day_of_week_trends(self, days: int = 28, timezone_str: str = "Europe/London") -> str:
+        """
+        Get cross-sectional day-of-week trends over the last N days (default 28) to analyze weekend vs. weekday differences.
+        """
+        try:
+            from google.cloud import bigquery
+            full_table_id = self._get_full_table_id()
+            _logger.info(f"Computing day-of-week trends over the last {days} days from BigQuery...")
+
+            query = f"""
+                WITH daily_metrics AS (
+                    SELECT 
+                        DATE(device_timestamp, @timezone) as date_val,
+                        EXTRACT(DAYOFWEEK FROM device_timestamp AT TIME ZONE @timezone) as dow,
+                        AVG(historic_glucose) as avg_glucose,
+                        STDDEV(historic_glucose) as std_glucose,
+                        SUM(rapid_acting_insulin) as total_insulin,
+                        COUNT(historic_glucose) as readings_count
+                    FROM `{full_table_id}`
+                    WHERE device_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+                    GROUP BY date_val, dow
+                    HAVING readings_count > 0
+                )
+                SELECT 
+                    dow,
+                    ROUND(AVG(avg_glucose), 2) as avg_glucose,
+                    ROUND(AVG(std_glucose), 2) as avg_std_glucose,
+                    ROUND(AVG(total_insulin), 2) as avg_daily_insulin,
+                    COUNT(date_val) as days_analyzed
+                FROM daily_metrics
+                GROUP BY dow
+                ORDER BY dow
+            """
+            params = [
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("timezone", "STRING", timezone_str)
+            ]
+            df = self._run_bigquery_query(query, params)
+
+            if df.empty:
+                return f"No glucose data found in BigQuery for the last {days} days."
+
+            dow_names = {
+                1: "Sunday",
+                2: "Monday",
+                3: "Tuesday",
+                4: "Wednesday",
+                5: "Thursday",
+                6: "Friday",
+                7: "Saturday"
+            }
+
+            lines = [
+                f"📅 **Day of Week Cross-Sectional Trends (Last {days} Days)**\n",
+                "| Day of Week | Avg Glucose (mmol/L) | Avg Daily Variability | Avg Daily Insulin (U) | Days Analyzed |",
+                "| :--- | :---: | :---: | :---: | :---: |"
+            ]
+
+            for _, row in df.iterrows():
+                dow = int(row["dow"])
+                dow_name = dow_names.get(dow, f"Day {dow}")
+                avg_g = row["avg_glucose"]
+                avg_std = row["avg_std_glucose"]
+                avg_ins = row["avg_daily_insulin"]
+                days_count = int(row["days_analyzed"])
+
+                avg_g_str = f"{avg_g:.2f}" if pd.notnull(avg_g) else "N/A"
+                avg_std_str = f"{avg_std:.2f}" if pd.notnull(avg_std) else "N/A"
+                avg_ins_str = f"{avg_ins:.2f}" if pd.notnull(avg_ins) else "0.00"
+
+                lines.append(f"| {dow_name} | {avg_g_str} | {avg_std_str} | {avg_ins_str} | {days_count} |")
+
+            # Calculate weekday vs weekend aggregate
+            weekday_df = df[df["dow"].isin([2, 3, 4, 5, 6])]
+            weekend_df = df[df["dow"].isin([1, 7])]
+
+            lines.append("\n📊 **Weekday vs. Weekend Comparison:**")
+            if not weekday_df.empty:
+                wd_avg = weekday_df["avg_glucose"].mean()
+                wd_ins = weekday_df["avg_daily_insulin"].dropna().mean()
+                wd_ins_str = f"{wd_ins:.2f} U" if pd.notnull(wd_ins) else "0.00 U"
+                lines.append(f"- **Weekdays (Mon-Fri)**: Avg Glucose **{wd_avg:.2f} mmol/L**, Avg Daily Insulin **{wd_ins_str}**")
+            if not weekend_df.empty:
+                we_avg = weekend_df["avg_glucose"].mean()
+                we_ins = weekend_df["avg_daily_insulin"].dropna().mean()
+                we_ins_str = f"{we_ins:.2f} U" if pd.notnull(we_ins) else "0.00 U"
+                lines.append(f"- **Weekends (Sat-Sun)**: Avg Glucose **{we_avg:.2f} mmol/L**, Avg Daily Insulin **{we_ins_str}**")
+
+            return "\n".join(lines)
+        except Exception as e:
+            _logger.error(f"Failed to fetch day of week trends: {e}")
+            return f"Error retrieving day of week trends: {str(e)}"
+
+    def get_daily_insulin_summary(self, days: int = 14, timezone_str: str = "Europe/London") -> str:
+        """
+        Get daily total insulin dose (excluding days with no CGM readings) over the last N days (default 14).
+        Exposes daily insulin resistance trends (more daily insulin = higher resistance).
+        """
+        try:
+            from google.cloud import bigquery
+            full_table_id = self._get_full_table_id()
+            _logger.info(f"Computing daily insulin summary over the last {days} days from BigQuery...")
+
+            query = f"""
+                SELECT 
+                    DATE(device_timestamp, @timezone) as date_val,
+                    ROUND(SUM(rapid_acting_insulin), 2) as total_insulin,
+                    ROUND(AVG(historic_glucose), 2) as avg_glucose,
+                    COUNT(historic_glucose) as readings_count
+                FROM `{full_table_id}`
+                WHERE device_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+                GROUP BY date_val
+                HAVING readings_count > 0
+                ORDER BY date_val DESC
+            """
+            params = [
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("timezone", "STRING", timezone_str)
+            ]
+            df = self._run_bigquery_query(query, params)
+
+            if df.empty:
+                return f"No data found in BigQuery for the last {days} days."
+
+            lines = [
+                f"💉 **Daily Insulin & Glucose Summary (Last {days} Days)**\n",
+                "| Date | Total Insulin (Units) | Avg Glucose (mmol/L) | Readings Count | Insulin Resistance Indicator |",
+                "| :--- | :---: | :---: | :---: | :--- |"
+            ]
+
+            valid_insulin_days = 0
+            total_insulin_sum = 0.0
+            max_insulin = 0.0
+            max_insulin_date = "N/A"
+            min_insulin = float('inf')
+            min_insulin_date = "N/A"
+
+            for _, row in df.iterrows():
+                dt_str = str(row["date_val"])
+                insulin = row["total_insulin"]
+                avg_g = row["avg_glucose"]
+                count = int(row["readings_count"])
+
+                if pd.isnull(insulin):
+                    insulin = 0.0
+
+                total_insulin_sum += insulin
+                valid_insulin_days += 1
+
+                if insulin > max_insulin:
+                    max_insulin = insulin
+                    max_insulin_date = dt_str
+                if insulin < min_insulin:
+                    min_insulin = insulin
+                    min_insulin_date = dt_str
+
+                # Categorize insulin load as indicator of insulin resistance
+                if insulin == 0:
+                    indicator = "🟢 Very Low / None"
+                elif insulin <= 5:
+                    indicator = "🟢 Low"
+                elif insulin <= 12:
+                    indicator = "🟡 Moderate"
+                elif insulin <= 20:
+                    indicator = "🟠 High"
+                else:
+                    indicator = "🔴 Very High (High Resistance)"
+
+                lines.append(f"| {dt_str} | {insulin:.1f} U | {avg_g:.2f} | {count} | {indicator} |")
+
+            avg_daily_insulin = total_insulin_sum / valid_insulin_days if valid_insulin_days > 0 else 0.0
+
+            lines.append("\n📌 **Daily Insulin Statistics:**")
+            lines.append(f"- **Average Daily Insulin**: {avg_daily_insulin:.2f} Units")
+            if max_insulin > 0:
+                lines.append(f"- **Peak Daily Insulin**: {max_insulin:.1f} Units on **{max_insulin_date}** (Potential High Insulin Resistance)")
+            if min_insulin < float('inf'):
+                lines.append(f"- **Lowest Daily Insulin**: {min_insulin:.1f} Units on **{min_insulin_date}**")
+            lines.append("- *Note: More insulin is generally an indicator of higher insulin resistance for a given glycemic outcome.*")
+
+            return "\n".join(lines)
+        except Exception as e:
+            _logger.error(f"Failed to fetch daily insulin summary: {e}")
+            return f"Error retrieving daily insulin summary: {str(e)}"
+
+    def get_exercise_glucose_correlation(self, days: int = 30, timezone_str: str = "Europe/London") -> str:
+        """
+        Cross-reference Garmin activities (physical exercise days) with BigQuery CGM data.
+        Helps answer: "does my blood sugar tend to go higher on days when I don't exercise"
+        """
+        try:
+            from services.garmin_service import GarminService
+            from google.cloud import bigquery
+            
+            _logger.info(f"Analyzing Garmin exercise vs BigQuery glucose correlation over the last {days} days...")
+            
+            # 1. Fetch Garmin Activities
+            garmin_service = GarminService()
+            activities_json_str = garmin_service.get_garmin_activities()
+            
+            exercise_dates = set()
+            activities_by_date = {}
+            
+            if activities_json_str and not activities_json_str.startswith("Error"):
+                import json
+                try:
+                    activities = json.loads(activities_json_str)
+                    for act in activities:
+                        # Garmin activities have local start time, e.g. "2026-05-25 08:30:00.0"
+                        start_time_str = act.get("startTimeLocal", "")
+                        if start_time_str:
+                            act_date = start_time_str.split(" ")[0] # Extracts "YYYY-MM-DD"
+                            exercise_dates.add(act_date)
+                            if act_date not in activities_by_date:
+                                activities_by_date[act_date] = []
+                            activities_by_date[act_date].append(act.get("activityName", act.get("activityType", {}).get("typeKey", "Exercise")))
+                except Exception as ex:
+                    _logger.error(f"Failed to parse Garmin activities json: {ex}")
+            else:
+                _logger.warning(f"Could not retrieve Garmin activities: {activities_json_str}")
+
+            # 2. Query Daily Glucose and Insulin Data
+            full_table_id = self._get_full_table_id()
+            query = f"""
+                SELECT 
+                    DATE(device_timestamp, @timezone) as date_val,
+                    ROUND(AVG(historic_glucose), 2) as avg_glucose,
+                    ROUND(STDDEV(historic_glucose), 2) as std_glucose,
+                    ROUND(SUM(rapid_acting_insulin), 2) as total_insulin,
+                    COUNT(historic_glucose) as readings_count
+                FROM `{full_table_id}`
+                WHERE device_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+                GROUP BY date_val
+                HAVING readings_count > 0
+                ORDER BY date_val DESC
+            """
+            params = [
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("timezone", "STRING", timezone_str)
+            ]
+            df = self._run_bigquery_query(query, params)
+
+            if df.empty:
+                return f"No glucose readings found in BigQuery for the last {days} days to run correlation."
+
+            # 3. Categorize into Exercise vs Non-Exercise days
+            exercise_days_stats = []
+            non_exercise_days_stats = []
+
+            for _, row in df.iterrows():
+                dt_str = str(row["date_val"])
+                avg_g = row["avg_glucose"]
+                std_g = row["std_glucose"]
+                ins = row["total_insulin"] if pd.notnull(row["total_insulin"]) else 0.0
+                
+                day_data = {
+                    "date": dt_str,
+                    "avg_glucose": avg_g,
+                    "std_glucose": std_g,
+                    "total_insulin": ins
+                }
+
+                if dt_str in exercise_dates:
+                    day_data["activities"] = ", ".join(activities_by_date[dt_str])
+                    exercise_days_stats.append(day_data)
+                else:
+                    day_data["activities"] = "None"
+                    non_exercise_days_stats.append(day_data)
+
+            # 4. Compute overall statistics
+            n_exercise = len(exercise_days_stats)
+            n_non_exercise = len(non_exercise_days_stats)
+
+            if n_exercise == 0 and n_non_exercise == 0:
+                return "No matching days found to compare exercise vs non-exercise statistics."
+
+            def get_mean(lst, key):
+                vals = [item[key] for item in lst if pd.notnull(item[key])]
+                return sum(vals) / len(vals) if vals else 0.0
+
+            avg_g_ex = get_mean(exercise_days_stats, "avg_glucose")
+            avg_g_no = get_mean(non_exercise_days_stats, "avg_glucose")
+            
+            avg_std_ex = get_mean(exercise_days_stats, "std_glucose")
+            avg_std_no = get_mean(non_exercise_days_stats, "std_glucose")
+
+            avg_ins_ex = get_mean(exercise_days_stats, "total_insulin")
+            avg_ins_no = get_mean(non_exercise_days_stats, "total_insulin")
+
+            # 5. Build Markdown Output
+            lines = [
+                f"🏃‍♂️ **Garmin Exercise vs. CGM Glucose Correlation (Last {days} Days)**\n"
+            ]
+
+            # Direct Answer
+            if n_exercise > 0 and n_non_exercise > 0:
+                diff = avg_g_no - avg_g_ex
+                if diff > 0:
+                    lines.append(f"✅ **Direct Insight**: Yes, your blood sugar tends to go higher on days when you **don't** exercise! On non-exercise days, your average glucose was **{avg_g_no:.2f} mmol/L** compared to **{avg_g_ex:.2f} mmol/L** on exercise days (an increase of **+{diff:.2f} mmol/L**).\n")
+                else:
+                    lines.append(f"ℹ️ **Direct Insight**: On exercise days, your average glucose was **{avg_g_ex:.2f} mmol/L** compared to **{avg_g_no:.2f} mmol/L** on non-exercise days (a difference of **{abs(diff):.2f} mmol/L**).\n")
+            else:
+                lines.append(f"⚠️ **Direct Insight**: In the last {days} days, we were not able to compare both groups due to a lack of data in one of them.\n")
+
+            # Comparison Table
+            lines.append("### 📊 Group Comparison Table")
+            lines.append("| Metric | Exercise Days ({}) | Non-Exercise Days ({}) | Difference |".format(n_exercise, n_non_exercise))
+            lines.append("| :--- | :---: | :---: | :---: |")
+            
+            diff_g = avg_g_no - avg_g_ex
+            diff_std = avg_std_no - avg_std_ex
+            diff_ins = avg_ins_no - avg_ins_ex
+
+            lines.append(f"| **Average Glucose** | {avg_g_ex:.2f} mmol/L | {avg_g_no:.2f} mmol/L | {diff_g:+.2f} mmol/L |")
+            lines.append(f"| **Average Variability (StdDev)** | {avg_std_ex:.2f} mmol/L | {avg_std_no:.2f} mmol/L | {diff_std:+.2f} mmol/L |")
+            lines.append(f"| **Average Daily Insulin** | {avg_ins_ex:.1f} U | {avg_ins_no:.1f} U | {diff_ins:+.1f} U |")
+
+            # Lists of days for transparency
+            if exercise_days_stats:
+                lines.append("\n### 🟢 Logged Exercise Days Detail")
+                lines.append("| Date | Activities | Avg Glucose | Daily Insulin |")
+                lines.append("| :--- | :--- | :---: | :---: |")
+                for day in exercise_days_stats:
+                    lines.append("| {} | {} | {:.2f} | {:.1f} U |".format(day["date"], day["activities"], day["avg_glucose"], day["total_insulin"]))
+
+            return "\n".join(lines)
+        except Exception as e:
+            _logger.error(f"Failed to fetch exercise glucose correlation: {e}")
+            return f"Error retrieving exercise glucose correlation: {str(e)}"
 
     def _get_latest_bigquery_timestamp(self, client, full_table_id: str) -> Optional[datetime]:
         """Query BigQuery to find the latest timestamp we have successfully uploaded."""
